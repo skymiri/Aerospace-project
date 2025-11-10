@@ -1,0 +1,54 @@
+# ------------------------
+# Python / Flask
+# ------------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.db
+instance/
+.env
+venv/
+.env.*
+*.log
+
+# ------------------------
+# Jupyter notebooks
+# ------------------------
+.ipynb_checkpoints/
+notebooks/.ipynb_checkpoints/
+
+# ------------------------
+# Data files
+# ------------------------
+/data/*
+!/data/.gitkeep
+/uploads/*
+!/uploads/.gitkeep
+/static/plots/*
+!/static/plots/.gitkeep
+
+# ------------------------
+# Docker
+# ------------------------
+*.pid
+*.sock
+*.tar
+*.bak
+*.swp
+.dockerignore
+docker-compose.override.yml
+.env.docker
+
+# ------------------------
+# VS Code / Editors
+# ------------------------
+.vscode/
+.idea/
+*.code-workspace
+
+# ------------------------
+# Misc
+# ------------------------
+.DS_Store
+Thumbs.db
