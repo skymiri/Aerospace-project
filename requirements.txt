@@ -4,4 +4,5 @@ psycopg2-binary
 pandas
 numpy
 matplotlib
-pandas
+requests
+python-dotenv
