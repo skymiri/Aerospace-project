@@ -9,11 +9,17 @@ Example input line:
 Output columns:
     raw_ts, ts, sn1, sn2, U, V, T, BatteryPct, BattV, BattC, VectorMag, VectorDir
 """
+
 import csv
 import math
 from datetime import datetime, timezone
 import sys
 import os
+from aerospace_notify.aerospace_notifier import (
+    wind_over_threshold,
+    pipeline_success,
+    pipeline_failure,
+)
 
 
 # ======================================================
@@ -122,7 +128,9 @@ def parse_timestamp(raw_ts):
 # ======================================================
 # MAIN CONVERTER
 # ======================================================
-def convert_file(input_path, output_path=None, assume_tz_name="America/Vancouver", keep_sn=True):
+def convert_file(
+    input_path, output_path=None, assume_tz_name="America/Vancouver", keep_sn=True
+):
     """
     Converts a raw .txt file → /data/Anemometer_data_<basename>.csv
     Always returns the final output path.
@@ -144,25 +152,58 @@ def convert_file(input_path, output_path=None, assume_tz_name="America/Vancouver
         try:
             u = float(row["U"])
             v = float(row["V"])
-            mag = math.sqrt(u ** 2 + v ** 2)
+            mag = math.sqrt(u**2 + v**2)
             deg = (math.degrees(math.atan2(u, v)) + 360) % 360
         except Exception:
             mag, deg = "", ""
         row["VectorMag"] = mag
         row["VectorDir"] = deg
 
+    # 고풍속 경보 체크(샘플 100개만 빠르게 확인):
+    # - 전체 데이터에 매번 경보 체크하면 비용이 커질 수 있어 샘플링한다.
+    # - 고풍속이 감지되면 즉시 경보를 1회 보낸다(중복 제어는 상위 로직/워처에서 추가 가능).
+    try:
+        HIGH_WIND = float(os.getenv("AERO_WIND_LIMIT_MS", "12"))
+        for row in rows[:100]:
+            if isinstance(row.get("VectorMag"), float) and row["VectorMag"] > HIGH_WIND:
+                wind_over_threshold(
+                    row["VectorMag"], HIGH_WIND, row.get("ts", ""), "anemometer_convert"
+                )
+                break
+    except Exception:
+        # 알림 실패가 변환 로직을 멈추지 않도록 한다.
+        pass
+
     # Write CSV
     columns = [
-        "raw_ts", "ts", "sn1", "sn2",
-        "U", "V", "T", "BatteryPct", "BattV", "BattC",
-        "VectorMag", "VectorDir",
+        "raw_ts",
+        "ts",
+        "sn1",
+        "sn2",
+        "U",
+        "V",
+        "T",
+        "BatteryPct",
+        "BattV",
+        "BattC",
+        "VectorMag",
+        "VectorDir",
     ]
 
-    with open(output_path, "w", newline="", encoding="utf-8") as out:
-        writer = csv.DictWriter(out, fieldnames=columns)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({col: row.get(col, "") for col in columns})
+    try:
+        with open(output_path, "w", newline="", encoding="utf-8") as out:
+            writer = csv.DictWriter(out, fieldnames=columns)
+            writer.writeheader()
+            for row in rows:
+                writer.writerow({col: row.get(col, "") for col in columns})
+
+        # CSV 저장 성공 알림
+        pipeline_success(stage="AnemometerConvert", note=os.path.basename(output_path))
+
+    except Exception as e:
+        # CSV 저장 실패 알림
+        pipeline_failure(stage="AnemometerConvert", err=str(e))
+        raise
 
     print(f"[INFO] Converted {len(rows)} lines.")
     print(f"[INFO] Saved anemometer CSV to {output_path}")
@@ -176,9 +217,13 @@ def convert_file(input_path, output_path=None, assume_tz_name="America/Vancouver
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description="Convert anemometer .txt → CSV with UTC timestamps.")
+    parser = argparse.ArgumentParser(
+        description="Convert anemometer .txt → CSV with UTC timestamps."
+    )
     parser.add_argument("input", help="Path to input .txt log file")
-    parser.add_argument("--drop-sn", action="store_true", help="Omit sn1 and sn2 columns")
+    parser.add_argument(
+        "--drop-sn", action="store_true", help="Omit sn1 and sn2 columns"
+    )
     args = parser.parse_args()
 
     keep_sn = not args.drop_sn

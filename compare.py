@@ -3,6 +3,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os, glob
 from datetime import datetime
+from aerospace_notify.aerospace_notifier import pipeline_success, pipeline_failure
+
 
 # ======================================================
 # CONFIGURATION
@@ -36,10 +38,12 @@ def get_latest(patterns, required=True):
 # LOAD DATA
 # ======================================================
 def load_data():
-    drone_path = get_latest([
-        os.path.join(CLEANED_DIR, "CLEAN_*.csv"),
-        os.path.join(DATA_DIR, "CLEAN_*.csv"),
-    ])
+    drone_path = get_latest(
+        [
+            os.path.join(CLEANED_DIR, "CLEAN_*.csv"),
+            os.path.join(DATA_DIR, "CLEAN_*.csv"),
+        ]
+    )
     anemo_path = get_latest(os.path.join(DATA_DIR, "Anemometer_data_*.csv"))
 
     print(f"[INFO] Using Drone CSV: {drone_path}")
@@ -60,9 +64,15 @@ def load_data():
 
     # Ensure numeric conversion for all relevant columns
     numeric_cols = [
-        "VectorMag", "VectorDir", "U", "V",
-        "BatteryPct", "BattV", "BattC",
-        "WEATHER.windSpeed [MPH]", "WEATHER.windDirection"
+        "VectorMag",
+        "VectorDir",
+        "U",
+        "V",
+        "BatteryPct",
+        "BattV",
+        "BattC",
+        "WEATHER.windSpeed [MPH]",
+        "WEATHER.windDirection",
     ]
     for df_name, df in [("Drone", drone), ("Anemometer", anemo)]:
         for col in numeric_cols:
@@ -71,7 +81,12 @@ def load_data():
 
     # Debug info for ranges
     print("\n[DEBUG] Drone time range:")
-    print(" ", drone["Drone_Time(UTC+RFC3339)"].min(), "→", drone["Drone_Time(UTC+RFC3339)"].max())
+    print(
+        " ",
+        drone["Drone_Time(UTC+RFC3339)"].min(),
+        "→",
+        drone["Drone_Time(UTC+RFC3339)"].max(),
+    )
     print("[DEBUG] Anemometer time range:")
     print(" ", anemo["ts"].min(), "→", anemo["ts"].max())
 
@@ -97,28 +112,40 @@ def compare_vectors(drone, anemo, tolerance_seconds=300):
         tolerance=pd.Timedelta(seconds=tolerance_seconds),
     )
 
-    if "VectorMag" not in merged.columns or "WEATHER.windSpeed [MPH]" not in merged.columns:
-        raise KeyError("[ERROR] Missing one or more required columns: 'VectorMag', 'WEATHER.windSpeed [MPH]'")
+    if (
+        "VectorMag" not in merged.columns
+        or "WEATHER.windSpeed [MPH]" not in merged.columns
+    ):
+        raise KeyError(
+            "[ERROR] Missing one or more required columns: 'VectorMag', 'WEATHER.windSpeed [MPH]'"
+        )
 
     # Convert again to be sure (handles merge dtype promotion)
-    for col in ["VectorMag", "VectorDir", "WEATHER.windSpeed [MPH]", "WEATHER.windDirection"]:
+    for col in [
+        "VectorMag",
+        "VectorDir",
+        "WEATHER.windSpeed [MPH]",
+        "WEATHER.windDirection",
+    ]:
         merged[col] = pd.to_numeric(merged[col], errors="coerce")
 
     merged = merged.dropna(subset=["VectorMag", "WEATHER.windSpeed [MPH]"], how="any")
 
     print(f"[INFO] Matched {len(merged)} rows after merge.")
     if len(merged) == 0:
-        print("[WARN] No overlapping timestamps found — check timezone or timestamp offset.")
+        print(
+            "[WARN] No overlapping timestamps found — check timezone or timestamp offset."
+        )
         return merged
 
     # Compute metrics
     merged["speed_diff"] = merged["WEATHER.windSpeed [MPH]"] - merged["VectorMag"]
     merged["speed_pct_diff"] = (
-        (merged["speed_diff"].abs() / merged["VectorMag"].replace(0, np.nan)) * 100
-    )
+        merged["speed_diff"].abs() / merged["VectorMag"].replace(0, np.nan)
+    ) * 100
     merged["dir_diff"] = (
-        (merged["WEATHER.windDirection"] - merged["VectorDir"]).abs() % 360
-    )
+        merged["WEATHER.windDirection"] - merged["VectorDir"]
+    ).abs() % 360
 
     return merged
 
@@ -133,7 +160,12 @@ def generate_plots():
     os.makedirs(PLOT_DIR, exist_ok=True)
 
     if merged.empty:
-        print("[ERROR] No merged data available — skipping plot generation.")
+        try:
+            pipeline_failure(
+                stage="Analytics", err="No merged data; check timestamp alignment"
+            )
+        except Exception:
+            pass
         return used_path
 
     # --- 1. Wind Speed Comparison ---
@@ -185,6 +217,13 @@ def generate_plots():
     plt.tight_layout()
     plt.savefig(f"{PLOT_DIR}/direction_difference.png", dpi=150)
     plt.close()
+
+    # 분석/플롯 생성 후:
+    # - 성공 알림에는 요약 정보(머지된 행 수 등)를 note로 담아 운영자가 Slack/ntfy에서 한 눈에 보기 좋게 한다.
+    try:
+        pipeline_success(stage="Analytics", note=f"merged={len(merged)} rows")
+    except Exception:
+        pass
 
     print(f"[INFO] Saved plots to {PLOT_DIR}/")
     return used_path
